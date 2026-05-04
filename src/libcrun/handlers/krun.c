@@ -25,6 +25,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <errno.h>
 #include <sys/param.h>
 #include <sys/types.h>
@@ -557,11 +558,16 @@ libkrun_start_passt (void *cookie, libcrun_container_t *container)
   pid_t pid;
   char *passt_argv[9];
   char fd_as_str[16];
+  int exec_err_pipe[2];
   int use_passt;
   int argv_idx;
   int status;
+  int exec_errno;
   int null;
   int ret;
+  bool passt_output_to_null;
+  cleanup_close int exec_err_pipe_r = -1;
+  cleanup_close int exec_err_pipe_w = -1;
 
   use_passt = libkrun_parse_resource_configuration (kconf->config_tree, container, "krun.use_passt", "use_passt");
   if (use_passt > 0)
@@ -569,10 +575,21 @@ libkrun_start_passt (void *cookie, libcrun_container_t *container)
   else
     return 0;
 
+  libcrun_debug ("krun passt networking requested");
+
   ret = socketpair (AF_UNIX, SOCK_STREAM, 0, kconf->passt_fds);
   if (UNLIKELY (ret < 0))
     return ret;
   snprintf (fd_as_str, sizeof (fd_as_str), "%d", kconf->passt_fds[PASST_FD_CHILD]);
+
+  libcrun_debug ("krun passt socketpair parent fd `%d`, child fd `%d`",
+                 kconf->passt_fds[PASST_FD_PARENT], kconf->passt_fds[PASST_FD_CHILD]);
+
+  ret = pipe2 (exec_err_pipe, O_CLOEXEC);
+  if (UNLIKELY (ret < 0))
+    return ret;
+  exec_err_pipe_r = exec_err_pipe[0];
+  exec_err_pipe_w = exec_err_pipe[1];
 
   argv_idx = 0;
   passt_argv[argv_idx++] = (char *) "passt";
@@ -590,36 +607,88 @@ libkrun_start_passt (void *cookie, libcrun_container_t *container)
   passt_argv[argv_idx++] = fd_as_str;
   passt_argv[argv_idx] = NULL;
 
+  if (kconf->has_awsnitro)
+    libcrun_debug ("starting passt with argv: passt -t all --fd %s", fd_as_str);
+  else
+    libcrun_debug ("starting passt with argv: passt -t all -u all --no-dhcp-dns --fd %s", fd_as_str);
+
+  passt_output_to_null = libcrun_get_verbosity () < LIBCRUN_VERBOSITY_DEBUG;
+  if (! passt_output_to_null)
+    libcrun_debug ("leaving passt stdout and stderr attached because debug logging is enabled");
+
   pid = fork ();
   if (pid < 0)
     return pid;
   else if (pid == 0)
     {
+      int child_errno;
+
       close (kconf->passt_fds[PASST_FD_PARENT]);
+      close (exec_err_pipe_r);
 
-      null = open ("/dev/null", O_WRONLY);
-      if (null == -1)
-        _exit (EXIT_FAILURE);
+      if (passt_output_to_null)
+        {
+          null = open ("/dev/null", O_WRONLY);
+          if (null == -1)
+            {
+              child_errno = errno;
+              TEMP_FAILURE_RETRY (write (exec_err_pipe_w, &child_errno, sizeof (child_errno)));
+              _exit (EXIT_FAILURE);
+            }
 
-      // Redirect passt's stdout and stderr to /dev/null, as closing them here
-      // instead will cause passt to exit with an error.
-      dup2 (null, STDOUT_FILENO);
-      dup2 (null, STDERR_FILENO);
-      close (null);
+          if (dup2 (null, STDOUT_FILENO) < 0)
+            {
+              child_errno = errno;
+              TEMP_FAILURE_RETRY (write (exec_err_pipe_w, &child_errno, sizeof (child_errno)));
+              _exit (EXIT_FAILURE);
+            }
+          if (dup2 (null, STDERR_FILENO) < 0)
+            {
+              child_errno = errno;
+              TEMP_FAILURE_RETRY (write (exec_err_pipe_w, &child_errno, sizeof (child_errno)));
+              _exit (EXIT_FAILURE);
+            }
+          close (null);
+        }
 
       execvp ("passt", passt_argv);
-      // Only reachable on error.
+      child_errno = errno;
+      TEMP_FAILURE_RETRY (write (exec_err_pipe_w, &child_errno, sizeof (child_errno)));
       _exit (EXIT_FAILURE);
     }
 
+  close_and_reset (&exec_err_pipe_w);
   close (kconf->passt_fds[PASST_FD_CHILD]);
 
-  // Wait for passt to daemonize itself.
-  waitpid (pid, &status, 0);
-  if (! (WIFEXITED (status)) || WEXITSTATUS (status) != 0)
-    return -1;
+  ret = waitpid (pid, &status, 0);
+  if (UNLIKELY (ret < 0))
+    return ret;
 
-  return 0;
+  ret = TEMP_FAILURE_RETRY (read (exec_err_pipe_r, &exec_errno, sizeof (exec_errno)));
+  if (ret == sizeof (exec_errno))
+    {
+      libcrun_debug ("passt failed before exec: errno `%d`", exec_errno);
+      errno = exec_errno;
+      return -1;
+    }
+  if (UNLIKELY (ret < 0))
+    return ret;
+
+  if (WIFEXITED (status) && WEXITSTATUS (status) == 0)
+    {
+      libcrun_debug ("passt daemonized successfully");
+      return 0;
+    }
+
+  if (WIFEXITED (status))
+    libcrun_debug ("passt exited with status `%d` while daemonizing", WEXITSTATUS (status));
+  else if (WIFSIGNALED (status))
+    libcrun_debug ("passt terminated by signal `%d` while daemonizing", WTERMSIG (status));
+  else
+    libcrun_debug ("passt stopped before daemonizing with wait status `%d`", status);
+
+  errno = EIO;
+  return -1;
 }
 
 /* libkrun_create_kvm_device: explicitly adds kvm device.  */

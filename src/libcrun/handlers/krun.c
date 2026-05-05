@@ -73,6 +73,10 @@
 #define PASST_FD_PARENT 0
 #define PASST_FD_CHILD 1
 
+#ifndef NET_FLAG_DHCP_CLIENT
+#  define NET_FLAG_DHCP_CLIENT (1 << 1)
+#endif
+
 struct krun_config
 {
   void *handle;
@@ -319,7 +323,7 @@ libkrun_configure_vm (uint32_t ctx_id, void *handle, struct krun_config *kconf, 
       krun_add_net_unixstream = dlsym (handle, "krun_add_net_unixstream");
 
       uint8_t mac[] = { 0x5a, 0x94, 0xef, 0xe4, 0x0c, 0xee };
-      ret = krun_add_net_unixstream (ctx_id, NULL, kconf->passt_fds[PASST_FD_PARENT], &mac[0], COMPAT_NET_FEATURES, 0);
+      ret = krun_add_net_unixstream (ctx_id, NULL, kconf->passt_fds[PASST_FD_PARENT], &mac[0], COMPAT_NET_FEATURES, NET_FLAG_DHCP_CLIENT);
       if (UNLIKELY (ret < 0))
         error (EXIT_FAILURE, -ret, "could not set krun net configuration");
     }

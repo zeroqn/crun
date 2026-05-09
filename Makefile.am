@@ -54,6 +54,7 @@ libcrun_SOURCES = src/libcrun/utils.c \
 		src/libcrun/error.c \
 		src/libcrun/handlers/handler-utils.c \
 		src/libcrun/handlers/krun.c \
+		src/libcrun/handlers/krun-disk.c \
 		src/libcrun/handlers/mono.c \
 		src/libcrun/handlers/spin.c \
 		src/libcrun/handlers/wasmedge.c \
@@ -177,7 +178,7 @@ EXTRA_DIST = COPYING COPYING.libcrun README.md NEWS SECURITY.md rpm/crun.spec au
 	src/libcrun/cgroup-resources.h src/libcrun/cgroup-setup.h \
 	src/libcrun/cgroup-systemd.h src/libcrun/cgroup-utils.h \
 	src/libcrun/custom-handler.h src/libcrun/io_priority.h \
-	src/libcrun/handlers/handler-utils.h \
+	src/libcrun/handlers/handler-utils.h src/libcrun/handlers/krun-disk.h \
 	src/libcrun/linux.h src/libcrun/utils.h src/libcrun/error.h src/libcrun/criu.h \
 	src/libcrun/scheduler.h src/libcrun/mempolicy.h src/libcrun/status.h src/libcrun/terminal.h \
 	src/libcrun/mount_flags.h src/libcrun/intelrdt.h src/libcrun/ring_buffer.h src/libcrun/string_map.h \
@@ -193,7 +194,7 @@ EXTRA_DIST += src/libcrun/blake3/blake3.c \
 endif
 
 if BUILD_TESTS
-UNIT_TESTS = tests/tests_libcrun_utils tests/tests_libcrun_ring_buffer tests/tests_libcrun_errors tests/tests_libcrun_intelrdt tests/tests_libcrun_terminal tests/tests_libcrun_custom_handler tests/tests_libcrun_linux tests/tests_libcrun_signals tests/tests_libcrun_mount_flags tests/tests_libcrun_chroot_realpath tests/tests_libcrun_seccomp_notify tests/tests_libcrun_cgroup
+UNIT_TESTS = tests/tests_libcrun_utils tests/tests_libcrun_ring_buffer tests/tests_libcrun_errors tests/tests_libcrun_intelrdt tests/tests_libcrun_terminal tests/tests_libcrun_custom_handler tests/tests_libcrun_linux tests/tests_libcrun_signals tests/tests_libcrun_mount_flags tests/tests_libcrun_chroot_realpath tests/tests_libcrun_seccomp_notify tests/tests_libcrun_cgroup tests/tests_libcrun_krun
 endif
 
 if ENABLE_CRUN
@@ -277,6 +278,11 @@ tests_tests_libcrun_cgroup_CFLAGS = -I $(abs_top_builddir)/libocispec/src -I $(a
 tests_tests_libcrun_cgroup_SOURCES = tests/tests_libcrun_cgroup.c
 tests_tests_libcrun_cgroup_LDADD = $(TESTS_LDADD)
 tests_tests_libcrun_cgroup_LDFLAGS = $(crun_LDFLAGS)
+
+tests_tests_libcrun_krun_CFLAGS = -I $(abs_top_builddir)/libocispec/src -I $(abs_top_srcdir)/libocispec/src -I $(abs_top_builddir)/src -I $(abs_top_srcdir)/src
+tests_tests_libcrun_krun_SOURCES = tests/tests_libcrun_krun.c
+tests_tests_libcrun_krun_LDADD = $(TESTS_LDADD)
+tests_tests_libcrun_krun_LDFLAGS = $(crun_LDFLAGS)
 
 endif
 TEST_EXTENSIONS = .py

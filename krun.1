@@ -30,6 +30,56 @@ Because of the additional isolation, sharing content with processes and other
 containers outside of the krun VM is more difficult.
 
 
+.SH DISK CONFIGURATION
+krun can attach additional raw disk images to the libkrun microVM as
+virtio-block data disks. Disk configuration is additive: it does not replace
+the root disk, change virtiofs, mount filesystems inside the guest, or support
+hotplug after the VM has started.
+
+.PP
+Disk annotations use a contiguous zero-based index:
+
+.EX
+krun.disk.0.path=/path/to/nix.raw
+krun.disk.0.id=nix
+krun.disk.0.readonly=false
+.EE
+
+.PP
+The supported fields are:
+
+.IP \[bu] 2
+\fBkrun.disk.N.path\fR: path to the raw disk image. This field is required.
+.IP \[bu] 2
+\fBkrun.disk.N.id\fR: block device identifier passed to libkrun. This field is required.
+.IP \[bu] 2
+\fBkrun.disk.N.readonly\fR: optional read-only flag. The default is \fBfalse\fR.
+
+.PP
+\fBN\fR must be \fB0\fR or a canonical decimal number without a sign or leading zeroes. Indexes must be contiguous from \fB0\fR. The annotation \fBreadonly\fR value must be exactly \fBtrue\fR or \fBfalse\fR.
+
+.PP
+The equivalent \fB.krun_vm.json\fR form is:
+
+.EX
+{
+  "disks": [
+    {
+      "path": "/path/to/nix.raw",
+      "id": "nix",
+      "readonly": false
+    }
+  ]
+}
+.EE
+
+.PP
+If any \fBkrun.disk.N.*\fR annotation is present, the annotation disk list overrides the \fB.krun_vm.json\fR \fBdisks\fR list entirely. Other top-level \fB.krun_vm.json\fR settings keep their existing behavior.
+
+.PP
+Only raw disk images are supported through this interface. The libkrun \fBformat\fR, \fBdirect_io\fR, and \fBsync_mode\fR options are intentionally not exposed. Extra disks are rejected for the \fBsev\fR flavor because that path configures a root disk with \fBkrun_set_root_disk\fR, which is mutually exclusive with \fBkrun_add_disk\fR. Unsupported fields in the \fBkrun.disk.N.*\fR annotation namespace or inside \fB.krun_vm.json\fR \fBdisks\fR entries are rejected.
+
+
 .SH COMMANDS
 See crun.1 man page for the commands available to krun
 

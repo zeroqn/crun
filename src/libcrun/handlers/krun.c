@@ -22,6 +22,7 @@
 #include "../container.h"
 #include "../utils.h"
 #include "../linux.h"
+#include "krun-disk.h"
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
@@ -171,6 +172,63 @@ libkrun_enable_virtio_gpu (struct krun_config *kconf, uint32_t virgl_flags)
     return 0;
 
   return krun_set_gpu_options (kconf->ctx_id, virgl_flags);
+}
+
+static const char *
+libkrun_selected_flavor_name (struct krun_config *kconf)
+{
+  if (kconf->sev)
+    return KRUN_FLAVOR_SEV;
+  if (kconf->awsnitro)
+    return KRUN_FLAVOR_AWS_NITRO;
+  return "standard";
+}
+
+static int
+libkrun_configure_disks (uint32_t ctx_id, void *handle, struct krun_config *kconf, libcrun_container_t *container, libcrun_error_t *err)
+{
+  int32_t (*krun_add_disk) (uint32_t ctx_id, const char *block_id, const char *disk_path, bool read_only);
+  struct krun_disk_config_s *disks = NULL;
+  size_t n_disks = 0;
+  size_t i;
+  int ret;
+
+  ret = krun_parse_disk_configs (container->annotations, kconf->config_tree, &disks, &n_disks, err);
+  if (UNLIKELY (ret < 0))
+    return ret;
+
+  if (n_disks == 0)
+    return 0;
+
+  if (kconf->sev)
+    {
+      krun_free_disk_configs (disks, n_disks);
+      return crun_make_error (err, 0, "krun disks cannot be used with `%s` flavor because it configures a root disk with krun_set_root_disk", libkrun_selected_flavor_name (kconf));
+    }
+
+  krun_add_disk = dlsym (handle, "krun_add_disk");
+  if (krun_add_disk == NULL)
+    {
+      krun_free_disk_configs (disks, n_disks);
+      return crun_make_error (err, 0, "could not find symbol `krun_add_disk` in selected libkrun library for `%s` flavor", libkrun_selected_flavor_name (kconf));
+    }
+
+  for (i = 0; i < n_disks; i++)
+    {
+      ret = krun_add_disk (ctx_id, disks[i].id, disks[i].path, disks[i].readonly);
+      if (UNLIKELY (ret < 0))
+        {
+          int saved_ret = ret;
+          cleanup_free char *disk_id = xstrdup (disks[i].id);
+          cleanup_free char *disk_path = xstrdup (disks[i].path);
+
+          krun_free_disk_configs (disks, n_disks);
+          return crun_make_error (err, -saved_ret, "could not add krun disk `%s` from `%s` for `%s` flavor", disk_id, disk_path, libkrun_selected_flavor_name (kconf));
+        }
+    }
+
+  krun_free_disk_configs (disks, n_disks);
+  return 0;
 }
 
 static int
@@ -546,7 +604,17 @@ libkrun_exec (void *cookie, libcrun_container_t *container, const char *pathname
       error (EXIT_FAILURE, errcode, "could not configure krun vm");
     }
 
+  ret = libkrun_configure_disks (ctx_id, handle, kconf, container, &err);
+  if (UNLIKELY (ret))
+    {
+      int errcode = crun_error_get_errno (&err);
+      libcrun_error_t *tmp_err = &err;
+      libcrun_error_write_warning_and_release (NULL, &tmp_err);
+      error (EXIT_FAILURE, errcode, "could not configure krun disks");
+    }
+
   json_object_put (kconf->config_doc);
+  yajl_tree_free (kconf->config_tree);
 
   ret = krun_start_enter (ctx_id);
   if (UNLIKELY (ret < 0))

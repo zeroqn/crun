@@ -99,6 +99,58 @@ Example:
 
     {"nested_virt": 1, "cpus": 4, "ram_mib": 2048}
 
+## DISK CONFIGURATION
+
+krun can attach additional raw disk images to the libkrun microVM as
+virtio-block data disks.  Disk configuration is additive: it does not replace
+the root disk, change virtiofs, mount filesystems inside the guest, or support
+hotplug after the VM has started.
+
+Disk annotations use a contiguous zero-based index:
+
+```
+krun.disk.0.path=/path/to/nix.raw
+krun.disk.0.id=nix
+krun.disk.0.readonly=false
+```
+
+The supported fields are:
+
+- `krun.disk.N.path`: path to the raw disk image.  This field is required.
+- `krun.disk.N.id`: block device identifier passed to libkrun.  This field is
+  required.
+- `krun.disk.N.readonly`: optional read-only flag.  The default is `false`.
+
+`N` must be `0` or a canonical decimal number without a sign or leading zeroes.
+Indexes must be contiguous from `0`.  The annotation `readonly` value must be
+exactly `true` or `false`.
+
+The equivalent `.krun_vm.json` form is:
+
+```json
+{
+  "disks": [
+    {
+      "path": "/path/to/nix.raw",
+      "id": "nix",
+      "readonly": false
+    }
+  ]
+}
+```
+
+If any `krun.disk.N.*` annotation is present, the annotation disk list overrides
+the `.krun_vm.json` `disks` list entirely.  Other top-level `.krun_vm.json`
+settings keep their existing behavior.
+
+Only raw disk images are supported through this interface.  The libkrun
+`format`, `direct_io`, and `sync_mode` options are intentionally not exposed.
+Extra disks are rejected for the `sev` flavor because that path configures a
+root disk with `krun_set_root_disk`, which is mutually exclusive with
+`krun_add_disk`.
+Unsupported fields in the `krun.disk.N.*` annotation namespace or inside
+`.krun_vm.json` `disks` entries are rejected.
+
 # COMMANDS
 
 See crun.1 man page for the commands available to krun

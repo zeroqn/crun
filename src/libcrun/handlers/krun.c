@@ -33,6 +33,9 @@
 #include <sys/sysmacros.h>
 #include <fcntl.h>
 #include <sched.h>
+#include <dirent.h>
+#include <stdlib.h>
+#include <limits.h>
 #include <ocispec/runtime_spec_schema_config_schema.h>
 
 #ifdef HAVE_DLOPEN
@@ -94,6 +97,16 @@ struct krun_config
   json_object *config_doc;
   json_object *config_tree;
   bool use_passt;
+  struct krun_disk_fd_config_s *disks;
+  size_t n_disks;
+};
+
+struct krun_disk_fd_config_s
+{
+  char *path;
+  char *id;
+  bool readonly;
+  int fd;
 };
 
 /* libkrun handler.  */
@@ -184,82 +197,139 @@ libkrun_selected_flavor_name (struct krun_config *kconf)
   return "standard";
 }
 
+static void
+libkrun_clear_disk_fds (struct krun_config *kconf)
+{
+  size_t i;
+
+  if (kconf->disks == NULL)
+    return;
+
+  for (i = 0; i < kconf->n_disks; i++)
+    {
+      close_and_reset (&kconf->disks[i].fd);
+      free (kconf->disks[i].path);
+      free (kconf->disks[i].id);
+    }
+
+  free (kconf->disks);
+  kconf->disks = NULL;
+  kconf->n_disks = 0;
+}
+
 static int
-libkrun_validate_disk_config (const struct krun_disk_config_s *disk, libcrun_error_t *err)
+libkrun_open_disk_config (struct krun_disk_fd_config_s *owned, libcrun_error_t *err)
 {
   struct stat st;
   cleanup_close int fd = -1;
 
-  fd = open (disk->path, (disk->readonly ? O_RDONLY : O_RDWR) | O_CLOEXEC | O_NONBLOCK);
+  fd = open (owned->path, (owned->readonly ? O_RDONLY : O_RDWR) | O_CLOEXEC | O_NONBLOCK);
   if (UNLIKELY (fd < 0))
     return crun_make_error (err, errno, "open krun disk `%s` from `%s` as %s",
-                            disk->id, disk->path, disk->readonly ? "read-only" : "read-write");
+                            owned->id, owned->path, owned->readonly ? "read-only" : "read-write");
 
   if (UNLIKELY (fstat (fd, &st) < 0))
-    return crun_make_error (err, errno, "stat krun disk `%s` from `%s`", disk->id, disk->path);
+    return crun_make_error (err, errno, "stat krun disk `%s` from `%s`", owned->id, owned->path);
 
   if (UNLIKELY (! S_ISREG (st.st_mode)))
     return crun_make_error (err, EINVAL, "krun disk `%s` path `%s` must be a regular raw disk image",
-                            disk->id, disk->path);
+                            owned->id, owned->path);
 
   if (UNLIKELY (st.st_size == 0))
     return crun_make_error (err, EINVAL, "krun disk `%s` path `%s` must not be empty",
-                            disk->id, disk->path);
+                            owned->id, owned->path);
+
+  owned->fd = fd;
+  fd = -1;
+  return 0;
+}
+
+static int
+libkrun_set_disk_configs (struct krun_config *kconf, struct krun_disk_config_s *disks, size_t n_disks, bool open_fds, libcrun_error_t *err)
+{
+  size_t i;
+  int ret;
+
+  libkrun_clear_disk_fds (kconf);
+
+  if (n_disks == 0)
+    return 0;
+
+  kconf->disks = xmalloc0 (sizeof (*kconf->disks) * n_disks);
+  for (i = 0; i < n_disks; i++)
+    kconf->disks[i].fd = -1;
+  kconf->n_disks = n_disks;
+
+  for (i = 0; i < n_disks; i++)
+    {
+      kconf->disks[i].path = xstrdup (disks[i].path);
+      kconf->disks[i].id = xstrdup (disks[i].id);
+      kconf->disks[i].readonly = disks[i].readonly;
+
+      if (open_fds)
+        {
+          ret = libkrun_open_disk_config (&kconf->disks[i], err);
+          if (UNLIKELY (ret < 0))
+            {
+              libkrun_clear_disk_fds (kconf);
+              return ret;
+            }
+        }
+    }
 
   return 0;
 }
 
 static int
-libkrun_configure_disks (uint32_t ctx_id, void *handle, struct krun_config *kconf, libcrun_container_t *container, libcrun_error_t *err)
+libkrun_configure_disks (uint32_t ctx_id, void *handle, struct krun_config *kconf, libcrun_error_t *err)
 {
   int32_t (*krun_add_disk) (uint32_t ctx_id, const char *block_id, const char *disk_path, bool read_only);
-  struct krun_disk_config_s *disks = NULL;
-  size_t n_disks = 0;
   size_t i;
   int ret;
 
-  ret = krun_parse_disk_configs (container->annotations, kconf->config_tree, &disks, &n_disks, err);
-  if (UNLIKELY (ret < 0))
-    return ret;
-
-  if (n_disks == 0)
+  if (kconf->n_disks == 0)
     return 0;
 
   if (kconf->sev)
     {
-      krun_free_disk_configs (disks, n_disks);
+      libkrun_clear_disk_fds (kconf);
       return crun_make_error (err, 0, "krun disks cannot be used with `%s` flavor because it configures a root disk with krun_set_root_disk", libkrun_selected_flavor_name (kconf));
     }
 
   krun_add_disk = dlsym (handle, "krun_add_disk");
   if (krun_add_disk == NULL)
     {
-      krun_free_disk_configs (disks, n_disks);
+      libkrun_clear_disk_fds (kconf);
       return crun_make_error (err, 0, "could not find symbol `krun_add_disk` in selected libkrun library for `%s` flavor", libkrun_selected_flavor_name (kconf));
     }
 
-  for (i = 0; i < n_disks; i++)
+  for (i = 0; i < kconf->n_disks; i++)
     {
-      ret = libkrun_validate_disk_config (&disks[i], err);
-      if (UNLIKELY (ret < 0))
+      proc_fd_path_t disk_fd_path;
+
+      if (UNLIKELY (kconf->disks[i].fd < 0))
         {
-          krun_free_disk_configs (disks, n_disks);
-          return ret;
+          cleanup_free char *disk_id = xstrdup (kconf->disks[i].id);
+          cleanup_free char *disk_path = xstrdup (kconf->disks[i].path);
+
+          libkrun_clear_disk_fds (kconf);
+          return crun_make_error (err, EINVAL, "krun disk `%s` from `%s` is not open for `%s` flavor", disk_id, disk_path, libkrun_selected_flavor_name (kconf));
         }
 
-      ret = krun_add_disk (ctx_id, disks[i].id, disks[i].path, disks[i].readonly);
+      get_proc_self_fd_path (disk_fd_path, kconf->disks[i].fd);
+      libcrun_debug ("adding krun disk `%s` from `%s`", kconf->disks[i].id, disk_fd_path);
+      ret = krun_add_disk (ctx_id, kconf->disks[i].id, disk_fd_path, kconf->disks[i].readonly);
       if (UNLIKELY (ret < 0))
         {
           int saved_ret = ret;
-          cleanup_free char *disk_id = xstrdup (disks[i].id);
-          cleanup_free char *disk_path = xstrdup (disks[i].path);
+          cleanup_free char *disk_id = xstrdup (kconf->disks[i].id);
+          cleanup_free char *disk_path = xstrdup (kconf->disks[i].path);
 
-          krun_free_disk_configs (disks, n_disks);
+          libkrun_clear_disk_fds (kconf);
           return crun_make_error (err, -saved_ret, "could not add krun disk `%s` from `%s` for `%s` flavor", disk_id, disk_path, libkrun_selected_flavor_name (kconf));
         }
     }
 
-  krun_free_disk_configs (disks, n_disks);
   return 0;
 }
 
@@ -292,6 +362,75 @@ libkrun_read_vm_config (struct krun_config *kconf, int rootfsfd, const char *roo
 
   kconf->config_tree = kconf->config_doc;
   return 0;
+}
+
+static int
+libkrun_sev_indicated_before_userns (struct krun_config *kconf, int rootfsfd, const char *rootfs, libcrun_container_t *container, bool *sev, libcrun_error_t *err)
+{
+  const char *path_flavor[] = { "flavor", (const char *) 0 };
+  cleanup_close int fd = -1;
+  yajl_val val_flavor = NULL;
+  const char *flavor = NULL;
+
+  *sev = false;
+
+  flavor = find_annotation (container, "krun.variant");
+  if (flavor == NULL && kconf->config_tree != NULL)
+    {
+      val_flavor = yajl_tree_get (kconf->config_tree, path_flavor, yajl_t_string);
+      if (val_flavor != NULL && YAJL_IS_STRING (val_flavor))
+        flavor = YAJL_GET_STRING (val_flavor);
+    }
+
+  if (flavor != NULL && strcmp (flavor, KRUN_FLAVOR_SEV) == 0)
+    {
+      *sev = true;
+      return 0;
+    }
+
+  fd = safe_openat (rootfsfd, rootfs, KRUN_SEV_FILE, O_PATH | O_CLOEXEC, 0, err);
+  if (fd >= 0)
+    {
+      *sev = true;
+      return 0;
+    }
+  if (errno == ENOENT)
+    {
+      crun_error_release (err);
+      return 0;
+    }
+
+  return fd;
+}
+
+static int
+libkrun_configure_disk_fds (struct krun_config *kconf, int rootfsfd, const char *rootfs, libcrun_container_t *container, libcrun_error_t *err)
+{
+  struct krun_disk_config_s *disks = NULL;
+  size_t n_disks = 0;
+  bool sev_indicated;
+  int ret;
+
+  ret = krun_parse_disk_configs (container->annotations, kconf->config_tree, &disks, &n_disks, err);
+  if (UNLIKELY (ret < 0))
+    return ret;
+
+  if (n_disks == 0)
+    {
+      krun_free_disk_configs (disks, n_disks);
+      return 0;
+    }
+
+  ret = libkrun_sev_indicated_before_userns (kconf, rootfsfd, rootfs, container, &sev_indicated, err);
+  if (UNLIKELY (ret < 0))
+    {
+      krun_free_disk_configs (disks, n_disks);
+      return ret;
+    }
+
+  ret = libkrun_set_disk_configs (kconf, disks, n_disks, ! sev_indicated, err);
+  krun_free_disk_configs (disks, n_disks);
+  return ret;
 }
 
 /*
@@ -636,7 +775,7 @@ libkrun_exec (void *cookie, libcrun_container_t *container, const char *pathname
       error (EXIT_FAILURE, errcode, "could not configure krun vm");
     }
 
-  ret = libkrun_configure_disks (ctx_id, handle, kconf, container, &err);
+  ret = libkrun_configure_disks (ctx_id, handle, kconf, &err);
   if (UNLIKELY (ret))
     {
       int errcode = crun_error_get_errno (&err);
@@ -855,6 +994,10 @@ libkrun_configure_container (void *cookie, enum handler_configure_phase phase,
       ret = libkrun_read_vm_config (kconf, rootfsfd, rootfs, err);
       if (UNLIKELY (ret < 0))
         return ret;
+
+      ret = libkrun_configure_disk_fds (kconf, rootfsfd, rootfs, container, err);
+      if (UNLIKELY (ret < 0))
+        return ret;
     }
 
   if (phase != HANDLER_CONFIGURE_AFTER_MOUNTS)
@@ -1017,6 +1160,8 @@ libkrun_unload (void *cookie, libcrun_error_t *err)
   struct krun_config *kconf = (struct krun_config *) cookie;
   if (kconf != NULL)
     {
+      libkrun_clear_disk_fds (kconf);
+
       if (kconf->handle != NULL)
         {
           r = dlclose (kconf->handle);
@@ -1135,6 +1280,87 @@ libkrun_modify_oci_configuration (void *cookie arg_unused, libcrun_context_t *co
   return 0;
 }
 
+static bool
+libkrun_is_preserved_fd (struct krun_config *kconf, int fd)
+{
+  size_t i;
+
+  if (kconf->use_passt && fd == kconf->passt_fds[PASST_FD_PARENT])
+    return true;
+
+  for (i = 0; i < kconf->n_disks; i++)
+    {
+      if (fd == kconf->disks[i].fd)
+        return true;
+    }
+
+  return false;
+}
+
+static bool
+libkrun_has_disk_fd_ge_than (struct krun_config *kconf, int fd)
+{
+  size_t i;
+
+  for (i = 0; i < kconf->n_disks; i++)
+    {
+      if (kconf->disks[i].fd >= fd)
+        return true;
+    }
+
+  return false;
+}
+
+static int
+libkrun_close_fds_ge_than_except (struct krun_config *kconf, libcrun_container_t *container, int n, libcrun_error_t *err)
+{
+  cleanup_close int cfd = -1;
+  cleanup_dir DIR *dir = NULL;
+  struct dirent *next;
+  int ret;
+  int fd;
+
+  cfd = libcrun_open_proc_file (container, "self/fd", O_DIRECTORY | O_RDONLY, err);
+  if (UNLIKELY (cfd < 0))
+    return cfd;
+
+  dir = fdopendir (cfd);
+  if (UNLIKELY (dir == NULL))
+    return crun_make_error (err, errno, "fdopendir `self/fd`");
+
+  cfd = -1;
+  fd = dirfd (dir);
+
+  for (next = readdir (dir); next; next = readdir (dir))
+    {
+      char *end = NULL;
+      const char *name = next->d_name;
+      long int val;
+      int close_fd;
+
+      if (name[0] == '.')
+        continue;
+
+      errno = 0;
+      val = strtol (name, &end, 10);
+      if (errno != 0 || end == name || *end != '\0' || val < 0 || val > INT_MAX)
+        continue;
+
+      close_fd = (int) val;
+      if (close_fd < n || close_fd == fd || libkrun_is_preserved_fd (kconf, close_fd))
+        continue;
+
+      ret = close (close_fd);
+      if (UNLIKELY (ret < 0))
+        return crun_make_error (err, errno, "close fd `%d`", close_fd);
+
+      if (close_fd == container->proc_fd)
+        container->proc_fd = -1;
+    }
+
+  return 0;
+}
+
 static int
 libkrun_close_fds (void *cookie, libcrun_container_t *container, int preserve_fds, libcrun_error_t *err)
 {
@@ -1142,6 +1368,9 @@ libkrun_close_fds (void *cookie, libcrun_container_t *container, int preserve_fd
   int first_fd_to_close = preserve_fds + 3;
   int passt_fd;
   int i;
+
+  if (libkrun_has_disk_fd_ge_than (kconf, first_fd_to_close))
+    return libkrun_close_fds_ge_than_except (kconf, container, first_fd_to_close, err);
 
   if (kconf->use_passt)
     {

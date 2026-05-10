@@ -56,6 +56,9 @@ The supported fields are:
 \fBkrun.disk.N.readonly\fR: optional read-only flag. The default is \fBfalse\fR.
 
 .PP
+The disk image path must point to an existing non-empty regular file. When \fBreadonly\fR is \fBfalse\fR, crun must be able to open the image read-write; use \fBreadonly=true\fR for images that should only be opened read-only.
+
+.PP
 \fBN\fR must be \fB0\fR or a canonical decimal number without a sign or leading zeroes. Indexes must be contiguous from \fB0\fR. The annotation \fBreadonly\fR value must be exactly \fBtrue\fR or \fBfalse\fR.
 
 .PP

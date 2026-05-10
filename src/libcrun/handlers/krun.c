@@ -185,6 +185,31 @@ libkrun_selected_flavor_name (struct krun_config *kconf)
 }
 
 static int
+libkrun_validate_disk_config (const struct krun_disk_config_s *disk, libcrun_error_t *err)
+{
+  struct stat st;
+  cleanup_close int fd = -1;
+
+  fd = open (disk->path, (disk->readonly ? O_RDONLY : O_RDWR) | O_CLOEXEC | O_NONBLOCK);
+  if (UNLIKELY (fd < 0))
+    return crun_make_error (err, errno, "open krun disk `%s` from `%s` as %s",
+                            disk->id, disk->path, disk->readonly ? "read-only" : "read-write");
+
+  if (UNLIKELY (fstat (fd, &st) < 0))
+    return crun_make_error (err, errno, "stat krun disk `%s` from `%s`", disk->id, disk->path);
+
+  if (UNLIKELY (! S_ISREG (st.st_mode)))
+    return crun_make_error (err, EINVAL, "krun disk `%s` path `%s` must be a regular raw disk image",
+                            disk->id, disk->path);
+
+  if (UNLIKELY (st.st_size == 0))
+    return crun_make_error (err, EINVAL, "krun disk `%s` path `%s` must not be empty",
+                            disk->id, disk->path);
+
+  return 0;
+}
+
+static int
 libkrun_configure_disks (uint32_t ctx_id, void *handle, struct krun_config *kconf, libcrun_container_t *container, libcrun_error_t *err)
 {
   int32_t (*krun_add_disk) (uint32_t ctx_id, const char *block_id, const char *disk_path, bool read_only);
@@ -215,6 +240,13 @@ libkrun_configure_disks (uint32_t ctx_id, void *handle, struct krun_config *kcon
 
   for (i = 0; i < n_disks; i++)
     {
+      ret = libkrun_validate_disk_config (&disks[i], err);
+      if (UNLIKELY (ret < 0))
+        {
+          krun_free_disk_configs (disks, n_disks);
+          return ret;
+        }
+
       ret = krun_add_disk (ctx_id, disks[i].id, disks[i].path, disks[i].readonly);
       if (UNLIKELY (ret < 0))
         {

@@ -121,6 +121,10 @@ The supported fields are:
   required.
 - `krun.disk.N.readonly`: optional read-only flag.  The default is `false`.
 
+The disk image path must point to an existing non-empty regular file.  When
+`readonly` is `false`, crun must be able to open the image read-write; use
+`readonly=true` for images that should only be opened read-only.
+
 `N` must be `0` or a canonical decimal number without a sign or leading zeroes.
 Indexes must be contiguous from `0`.  The annotation `readonly` value must be
 exactly `true` or `false`.

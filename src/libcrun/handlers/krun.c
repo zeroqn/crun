@@ -843,7 +843,6 @@ libkrun_start_passt (void *cookie, libcrun_container_t *container)
     {
       passt_argv[argv_idx++] = (char *) "-u";
       passt_argv[argv_idx++] = (char *) "all";
-      passt_argv[argv_idx++] = (char *) "--no-dhcp-dns";
     }
 
   passt_argv[argv_idx++] = (char *) "--fd";
@@ -853,7 +852,7 @@ libkrun_start_passt (void *cookie, libcrun_container_t *container)
   if (kconf->has_awsnitro)
     libcrun_debug ("starting passt with argv: passt -t all --fd %s", fd_as_str);
   else
-    libcrun_debug ("starting passt with argv: passt -t all -u all --no-dhcp-dns --fd %s", fd_as_str);
+    libcrun_debug ("starting passt with argv: passt -t all -u all --fd %s", fd_as_str);
 
   passt_output_to_null = libcrun_get_verbosity () < LIBCRUN_VERBOSITY_DEBUG;
   if (! passt_output_to_null)

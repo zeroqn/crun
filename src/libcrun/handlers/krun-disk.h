@@ -21,7 +21,7 @@
 #include <config.h>
 #include <stdbool.h>
 #include <stddef.h>
-#include <yajl/yajl_tree.h>
+#include <json-c/json.h>
 
 #include "../error.h"
 #include "../string_map.h"
@@ -35,7 +35,7 @@ struct krun_disk_config_s
 
 void krun_free_disk_configs (struct krun_disk_config_s *disks, size_t n_disks);
 
-int krun_parse_disk_configs (string_map *annotations, yajl_val config_tree,
+int krun_parse_disk_configs (string_map *annotations, json_object *config_tree,
                              struct krun_disk_config_s **disks, size_t *n_disks,
                              libcrun_error_t *err);
 

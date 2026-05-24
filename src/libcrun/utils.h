@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <argp.h>
+#include <json-c/json.h>
 #include "error.h"
 #include <dirent.h>
 #include <unistd.h>

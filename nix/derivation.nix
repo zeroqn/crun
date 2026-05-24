@@ -5,6 +5,7 @@
 , libcap
 , libseccomp
 , libsystemd
+, libocispec
 , json_c
 , criu
 }:
@@ -50,6 +51,9 @@ with pkgs; stdenv.mkDerivation {
       ++ lib.optional enableSystemd "${lib.getLib libsystemd}/lib/libsystemd.a"
       ++ [ "${json_c}/lib/libjson-c.a" ];
   in ''
+    rm -rf libocispec
+    cp -R --no-preserve=mode,ownership ${libocispec} libocispec
+    chmod -R u+w libocispec
     export CFLAGS='-static -pthread -DSTATIC'
     export LDFLAGS='-s -w -static-libgcc -static'
     export EXTRA_LDFLAGS='-s -w -linkmode external -extldflags "-static -lm"'

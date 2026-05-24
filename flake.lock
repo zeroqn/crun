@@ -1,5 +1,24 @@
 {
   "nodes": {
+    "libocispecSrc": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1778662070,
+        "narHash": "sha256-qaV8UjA9xnjyr4R746X4aKHSZpJLjL+9zKnq7DdMXi4=",
+        "ref": "refs/heads/main",
+        "rev": "8034d0ecd27f646ba3ffae5ff24db234ce062825",
+        "revCount": 535,
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/containers/libocispec"
+      },
+      "original": {
+        "rev": "8034d0ecd27f646ba3ffae5ff24db234ce062825",
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/containers/libocispec"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1774106199,
@@ -18,6 +37,7 @@
     },
     "root": {
       "inputs": {
+        "libocispecSrc": "libocispecSrc",
         "nixpkgs": "nixpkgs"
       }
     }

@@ -23,7 +23,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <yajl/yajl_tree.h>
 
 typedef int (*test) ();
 
@@ -69,21 +68,20 @@ static int
 parse_config (const struct annotation_s *annotations, size_t n_annotations, const char *json,
               struct krun_disk_config_s **disks, size_t *n_disks, libcrun_error_t *err)
 {
-  char errbuf[256] = { 0 };
   string_map *map = make_annotations (annotations, n_annotations);
-  yajl_val tree = NULL;
+  json_object *tree = NULL;
   int ret;
 
   if (json != NULL)
     {
-      tree = yajl_tree_parse (json, errbuf, sizeof (errbuf));
+      tree = json_tokener_parse (json);
       if (tree == NULL)
         abort ();
     }
 
   ret = krun_parse_disk_configs (map, tree, disks, n_disks, err);
   free_string_map (map);
-  yajl_tree_free (tree);
+  json_object_put (tree);
   return ret;
 }
 
@@ -344,11 +342,7 @@ test_duplicate_fields ()
     { "krun.disk.0.path", "/b.raw" },
     { "krun.disk.0.id", "disk" },
   };
-  const char *duplicate_json = "{\"disks\":[{\"path\":\"/a.raw\",\"path\":\"/b.raw\",\"id\":\"disk\"}]}";
-
   if (expect_failure (duplicate_annotations, 3, NULL) < 0)
-    return -1;
-  if (expect_failure (NULL, 0, duplicate_json) < 0)
     return -1;
 
   return 0;

@@ -3,9 +3,13 @@
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    libocispecSrc = {
+      url = "git+https://github.com/containers/libocispec?rev=8034d0ecd27f646ba3ffae5ff24db234ce062825&submodules=1";
+      flake = false;
+    };
   };
 
-  outputs = { self, nixpkgs }:
+  outputs = { self, nixpkgs, libocispecSrc }:
     let
       archConfigs = {
         amd64 = {
@@ -113,6 +117,7 @@
             inherit enableCriu enableSystemd;
             libcap = staticLibcap;
             libseccomp = staticLibseccomp;
+            libocispec = libocispecSrc;
             json_c = pkgs.json_c;
             libsystemd = staticSystemd;
             criu = staticCriu;

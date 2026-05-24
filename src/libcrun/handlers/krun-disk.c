@@ -393,16 +393,20 @@ parse_disk_annotations (string_map *annotations, struct krun_disk_config_s **dis
 }
 
 static int
-copy_json_string_field (yajl_val value, const char *field_name, size_t index, char **out, bool *found, libcrun_error_t *err)
+copy_json_string_field (json_object *value, const char *field_name, size_t index, char **out, bool *found, libcrun_error_t *err)
 {
+  const char *str;
+
   if (*found)
     return crun_make_error (err, 0, "duplicate krun disk JSON field `%s` for disk %zu", field_name, index);
-  if (! YAJL_IS_STRING (value))
+  if (! json_object_is_type (value, json_type_string))
     return crun_make_error (err, 0, "krun disk JSON field `%s` for disk %zu must be a string", field_name, index);
-  if (YAJL_GET_STRING (value)[0] == '\0')
+
+  str = json_object_get_string (value);
+  if (str == NULL || str[0] == '\0')
     return crun_make_error (err, 0, "krun disk JSON field `%s` for disk %zu must not be empty", field_name, index);
 
-  *out = dup_string (YAJL_GET_STRING (value), err);
+  *out = dup_string (str, err);
   if (UNLIKELY (*out == NULL))
     return -1;
   *found = true;
@@ -410,49 +414,43 @@ copy_json_string_field (yajl_val value, const char *field_name, size_t index, ch
 }
 
 static int
-parse_json_disk (yajl_val disk, size_t index, struct krun_disk_config_s *out, libcrun_error_t *err)
+parse_json_disk (json_object *disk, size_t index, struct krun_disk_config_s *out, libcrun_error_t *err)
 {
   bool has_path = false;
   bool has_id = false;
   bool has_readonly = false;
-  size_t i;
 
-  if (! YAJL_IS_OBJECT (disk))
+  if (! json_object_is_type (disk, json_type_object))
     return crun_make_error (err, 0, "krun disk JSON entry %zu must be an object", index);
 
-  for (i = 0; i < disk->u.object.len; i++)
-    {
-      const char *key = disk->u.object.keys[i];
-      yajl_val value = disk->u.object.values[i];
-      int ret;
+  json_object_object_foreach (disk, key, value)
+  {
+    int ret;
 
-      if (strcmp (key, "path") == 0)
-        {
-          ret = copy_json_string_field (value, key, index, &out->path, &has_path, err);
-          if (UNLIKELY (ret < 0))
-            return ret;
-        }
-      else if (strcmp (key, "id") == 0)
-        {
-          ret = copy_json_string_field (value, key, index, &out->id, &has_id, err);
-          if (UNLIKELY (ret < 0))
-            return ret;
-        }
-      else if (strcmp (key, "readonly") == 0)
-        {
-          if (has_readonly)
-            return crun_make_error (err, 0, "duplicate krun disk JSON field `readonly` for disk %zu", index);
-          if (YAJL_IS_TRUE (value))
-            out->readonly = true;
-          else if (YAJL_IS_FALSE (value))
-            out->readonly = false;
-          else
-            return crun_make_error (err, 0, "krun disk JSON field `readonly` for disk %zu must be a boolean", index);
-          has_readonly = true;
-        }
-      else
-        return crun_make_error (err, 0, "unsupported krun disk JSON field `%s` for disk %zu", key, index);
-    }
+    if (strcmp (key, "path") == 0)
+      {
+        ret = copy_json_string_field (value, key, index, &out->path, &has_path, err);
+        if (UNLIKELY (ret < 0))
+          return ret;
+      }
+    else if (strcmp (key, "id") == 0)
+      {
+        ret = copy_json_string_field (value, key, index, &out->id, &has_id, err);
+        if (UNLIKELY (ret < 0))
+          return ret;
+      }
+    else if (strcmp (key, "readonly") == 0)
+      {
+        if (has_readonly)
+          return crun_make_error (err, 0, "duplicate krun disk JSON field `readonly` for disk %zu", index);
+        if (! json_object_is_type (value, json_type_boolean))
+          return crun_make_error (err, 0, "krun disk JSON field `readonly` for disk %zu must be a boolean", index);
+        out->readonly = json_object_get_boolean (value);
+        has_readonly = true;
+      }
+    else
+      return crun_make_error (err, 0, "unsupported krun disk JSON field `%s` for disk %zu", key, index);
+  }
 
   if (! has_path)
     return crun_make_error (err, 0, "missing required krun disk JSON field `path` for disk %zu", index);
@@ -463,24 +461,23 @@ parse_json_disk (yajl_val disk, size_t index, struct krun_disk_config_s *out, li
 }
 
 static int
-parse_json_disks (yajl_val config_tree, struct krun_disk_config_s **disks, size_t *n_disks, libcrun_error_t *err)
+parse_json_disks (json_object *config_tree, struct krun_disk_config_s **disks, size_t *n_disks, libcrun_error_t *err)
 {
-  const char *path_disks[] = { "disks", (const char *) 0 };
-  yajl_val val_disks;
+  json_object *val_disks;
   size_t len;
   size_t i;
 
   if (config_tree == NULL)
     return 0;
 
-  val_disks = yajl_tree_get (config_tree, path_disks, yajl_t_any);
+  val_disks = json_object_object_get (config_tree, "disks");
   if (val_disks == NULL)
     return 0;
 
-  if (! YAJL_IS_ARRAY (val_disks))
+  if (! json_object_is_type (val_disks, json_type_array))
     return crun_make_error (err, 0, "krun VM configuration field `disks` must be an array");
 
-  len = YAJL_GET_ARRAY (val_disks)->len;
+  len = json_object_array_length (val_disks);
   if (len == 0)
     return 0;
 
@@ -491,7 +488,7 @@ parse_json_disks (yajl_val config_tree, struct krun_disk_config_s **disks, size_
 
   for (i = 0; i < len; i++)
     {
-      int ret = parse_json_disk (YAJL_GET_ARRAY (val_disks)->values[i], i, &(*disks)[i], err);
+      int ret = parse_json_disk (json_object_array_get_idx (val_disks, i), i, &(*disks)[i], err);
       if (UNLIKELY (ret < 0))
         {
           krun_free_disk_configs (*disks, *n_disks);
@@ -521,7 +518,7 @@ krun_free_disk_configs (struct krun_disk_config_s *disks, size_t n_disks)
 }
 
 int
-krun_parse_disk_configs (string_map *annotations, yajl_val config_tree,
+krun_parse_disk_configs (string_map *annotations, json_object *config_tree,
                          struct krun_disk_config_s **disks, size_t *n_disks,
                          libcrun_error_t *err)
 {

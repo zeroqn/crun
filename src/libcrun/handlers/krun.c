@@ -94,7 +94,6 @@ struct krun_config
   bool has_kvm;
   bool has_awsnitro;
   int passt_fds[2];
-  json_object *config_doc;
   json_object *config_tree;
   bool use_passt;
   struct krun_disk_fd_config_s *disks;
@@ -356,20 +355,17 @@ libkrun_read_vm_config (struct krun_config *kconf, int rootfsfd, const char *roo
   if (UNLIKELY (ret < 0))
     return ret;
 
-  ret = parse_json_file (&kconf->config_doc, config, NULL, err);
+  ret = parse_json_file (&kconf->config_tree, config, NULL, err);
   if (UNLIKELY (ret < 0))
     return ret;
-
-  kconf->config_tree = kconf->config_doc;
   return 0;
 }
 
 static int
 libkrun_sev_indicated_before_userns (struct krun_config *kconf, int rootfsfd, const char *rootfs, libcrun_container_t *container, bool *sev, libcrun_error_t *err)
 {
-  const char *path_flavor[] = { "flavor", (const char *) 0 };
   cleanup_close int fd = -1;
-  yajl_val val_flavor = NULL;
+  json_object *val_flavor = NULL;
   const char *flavor = NULL;
 
   *sev = false;
@@ -377,9 +373,9 @@ libkrun_sev_indicated_before_userns (struct krun_config *kconf, int rootfsfd, co
   flavor = find_annotation (container, "krun.variant");
   if (flavor == NULL && kconf->config_tree != NULL)
     {
-      val_flavor = yajl_tree_get (kconf->config_tree, path_flavor, yajl_t_string);
-      if (val_flavor != NULL && YAJL_IS_STRING (val_flavor))
-        flavor = YAJL_GET_STRING (val_flavor);
+      val_flavor = json_object_object_get (kconf->config_tree, "flavor");
+      if (val_flavor != NULL && json_object_is_type (val_flavor, json_type_string))
+        flavor = json_object_get_string (val_flavor);
     }
 
   if (flavor != NULL && strcmp (flavor, KRUN_FLAVOR_SEV) == 0)
@@ -784,8 +780,7 @@ libkrun_exec (void *cookie, libcrun_container_t *container, const char *pathname
       error (EXIT_FAILURE, errcode, "could not configure krun disks");
     }
 
-  json_object_put (kconf->config_doc);
-  yajl_tree_free (kconf->config_tree);
+  json_object_put (kconf->config_tree);
 
   ret = krun_start_enter (ctx_id);
   if (UNLIKELY (ret < 0))

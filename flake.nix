@@ -132,7 +132,25 @@
         }
       ) {} (builtins.attrNames archConfigs);
 
+      pkgs = import nixpkgs { system = "x86_64-linux"; };
+      versionSuffix = self.shortRev or self.dirtyShortRev or "dirty";
+      crun = pkgs.crun.overrideAttrs (old: {
+        version = "1.27.1-zeroqn-agentbox-${versionSuffix}";
+        src = self;
+        buildInputs = (old.buildInputs or []) ++ [ pkgs.json_c ];
+        postPatch = (old.postPatch or "") + ''
+          echo 1.27.1-zeroqn-agentbox-${versionSuffix} > .tarball-version
+          printf '#define GIT_VERSION "%s"\n' '${versionSuffix}' > git-version.h
+          rm -rf libocispec
+          cp -R --no-preserve=mode,ownership ${libocispecSrc} libocispec
+          chmod -R u+w libocispec
+        '';
+      });
+
     in {
-      packages.x86_64-linux = packages;
+      packages.x86_64-linux = packages // {
+        inherit crun;
+        default = crun;
+      };
     };
 }
